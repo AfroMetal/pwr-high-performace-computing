@@ -1,4 +1,5 @@
 #include <iostream>
+#include <omp.h>
 #include <NTL/ZZ.h>
 #include <NTL/ZZ_p.h>
 #include <assert.h>
@@ -29,51 +30,52 @@ void f(ZZ& x, ZZ& a, ZZ& b, ZZ alpha, ZZ beta, ZZ Q, ZZ P) {
 }
 
 ZZ pollard_rho(ZZ alpha, ZZ beta, ZZ P) {
-    ZZ Q = (P - ZZ(1)) / ZZ(2);
+    ZZ res;
     ZZ x, a, b, X, A, B;
-    x = 1;
-    a = 0;
-    b = 0;
-    X=x;
-    A=a;
-    B=b;
+    ZZ Q = (P - ZZ(1)) / ZZ(2);
 
-    for(ZZ i = ZZ(1); i < Q; ++i ) {
+    do {
+        a = RandomBnd(Q);
+    } while (a == 0);
+    do {
+        b = RandomBnd(Q);
+    } while (b == 0);
+    x = MulMod(PowerMod(alpha, a, P), PowerMod(beta, b, P), P);
+
+    X = x;
+    A = a;
+    B = b;
+    do {
         f(x, a, b, alpha, beta, Q, P);
         f(X, A, B, alpha, beta, Q, P);
         f(X, A, B, alpha, beta, Q, P);
+    } while (x != X);
 
-//        cout << i << '\t' << x << '\t' << a << '\t' << b << '\t' << X << '\t' << A << '\t' << B << '\n';
-
-        if(x == X) {
-            ZZ r;
-            r = SubMod(b, B, Q);
-            if(r < 0) r += Q;
-            cout << "r = " << r << '\n';
-            if(r == 0) {
-                return ZZ(-1);
-            }
+    if (x == X) {
+        ZZ r;
+        r = SubMod(b, B, Q);
+        cout << "r = " << r << '\n';
+        if (r == 0) {
+            res = ZZ(-1);
+        } else {
             ZZ inv_r;
             inv_r = InvMod(r, Q);
-            if(inv_r < 0) inv_r += Q;
             cout << "inv_r = " << inv_r << '\n';
-            ZZ xx;
-            xx = MulMod(inv_r, SubMod(A, a, Q), Q);
-            if(xx < 0) xx += Q;
-            cout << "iters = " << i << "\n\n";
-            return xx;
-        };
+            res = MulMod(inv_r, SubMod(A, a, Q), Q);\
+            cout << "result = " << res << "\n\n";
+        }
     }
+    return res;
 }
 
 int main(int argc, char **argv) {
-    ZZ P;
-    P = 383; // P
-    ZZ alpha;
-    alpha = 2; // generator g
-    ZZ beta;
-    beta = 274; // y = alpha^{x} = beta (mod P)
 
+    ZZ P;
+    P = 1971440220143; // P
+    ZZ alpha;
+    alpha = 847647113374; // generator g
+    ZZ beta;
+    beta = 1854382560287; // y = alpha^{x} = beta (mod P)
     // 1907 2 356
 
     if (argc == 4) {
@@ -86,10 +88,12 @@ int main(int argc, char **argv) {
         do {
             alpha = RandomBnd(P - ZZ(1)) + ZZ(1);
             alpha = PowerMod(alpha, ZZ(2), P);
-        } while (alpha == ZZ(1));
+        } while (alpha == 1);
 
         ZZ r;
         r = RandomBnd(P - ZZ(1)) + ZZ(1);
+
+        cout << "challenge = " << r << "\n\n";
         beta = PowerMod(alpha, r, P);
     } else {
         cout << "Using default values.\n"
@@ -97,13 +101,13 @@ int main(int argc, char **argv) {
     }
 
     cout << "Given prime P = (q - 1) / 2, Z_{P} group generator alpha, and beta "
-                   "such that beta = alpha^x mod P is sufficed for some x, find that x.\n\n";
+            "such that beta = alpha^x mod P is sufficed for some x, find that x.\n\n";
 
     cout << "beta = alpha^x mod P\n" << beta << " = " << alpha << "^x mod " << P << "\n\n";
-
-    ZZ x = pollard_rho(alpha, beta, P);
+    ZZ x;
+    x = pollard_rho(alpha, beta, P);
     if(x < 0){
-        std::cout << "failure\n";
+        cout << "failure\n";
     } else {
         ZZ real_beta = PowerMod(alpha, x, P);
         cout << "x = " << x << '\n';
