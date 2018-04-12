@@ -51,16 +51,12 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
     int index;
     string str;
     ZZ Q = (P - ZZ(1)) / ZZ(2);
-    ZZ res, beta_min, vi;
-    ZZ order;
-    order = P - ZZ(1);
+    ZZ res, beta_min;
     bool quit = false;
     map<ZZ, tuple<ZZ, bool, int>> distinguished_values;
 
     // beta_min = NUM_THREADS * sqrt(b - a) / 4
     beta_min = MulMod(ZZ(NUM_THREADS), SqrRoot(b - a), P) / ZZ(4);
-    // vi = beta_min / NUM_THREADS / 2
-    vi = beta_min / ZZ(NUM_THREADS) / ZZ(2);
 
     // r - max jumps
     r = MaxJumps(beta_min);
@@ -81,7 +77,7 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
 
     #pragma omp parallel \
     num_threads(NUM_THREADS) \
-    shared(res, quit, distinguished_values, jumps, dists, r, vi) \
+    shared(res, quit, distinguished_values, jumps, dists, r) \
     private(tid, dist, pos, kangaroo_type, x, step, index, str) \
     firstprivate(a, b, alpha, beta, P, Q)
     {
@@ -98,7 +94,7 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
                 // dist = i*vi
 //                dist = MulMod(i, vi, Q);
                 // pos = g^((a + b) / 2 + iv)
-                pos = PowerMod(alpha, (((a + b) / ZZ(2)) + i*ZZ(WILD_THREADS)) % P, P);
+                pos = PowerMod(alpha, ((a + b) / ZZ(2)) + i*ZZ(WILD_THREADS), P);
             } else {
                 kangaroo_type = WILD_KANGAROO;
                 ZZ j;
@@ -138,18 +134,18 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
                         if (kangaroo_type == TAME_KANGAROO) {
                             i = tid;
                             j = get<2>(ret.first->second) - TAME_THREADS;
-                            dist_tame = dist % P;
-                            dist_wild = get<0>(ret.first->second) % P;
+                            dist_tame = dist % Q;
+                            dist_wild = get<0>(ret.first->second) % Q;
                         } else {
                             i = get<2>(ret.first->second);
                             j = tid - TAME_THREADS;
-                            dist_tame = get<0>(ret.first->second) % P;
-                            dist_wild = dist % P;
+                            dist_tame = get<0>(ret.first->second) % Q;
+                            dist_wild = dist % Q;
                         }
-                        AddMod(x, x, dist_tame, P);
-                        SubMod(x, x, dist_wild, P);
-                        AddMod(x, x, i * WILD_THREADS, P);
-                        SubMod(x, x, j * TAME_THREADS, P);
+                        AddMod(x, x, dist_tame, Q);
+                        SubMod(x, x, dist_wild, Q);
+                        AddMod(x, x, i * WILD_THREADS, Q);
+                        SubMod(x, x, j * TAME_THREADS, Q);
 
                         res = x;
                     }
