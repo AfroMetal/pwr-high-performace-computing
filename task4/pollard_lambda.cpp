@@ -163,7 +163,7 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
 
 int main(int argc, char **argv) {
 
-    ZZ P;
+    ZZ Q, P;
     ZZ alpha;
     ZZ beta;
     ZZ a, b;
@@ -189,18 +189,18 @@ int main(int argc, char **argv) {
         beta = ZZ(atoi(argv[3]));
     } else if (argc == 2) {
         cout << "Using random " << argv[1] << " bits P and random values.\n";
-        P = (ZZ(2) * GenGermainPrime_ZZ(atoi(argv[1])-1)) + ZZ(1);
+        Q = GenGermainPrime_ZZ(atoi(argv[1])-1);
+        P = (ZZ(2) * Q) + ZZ(1);
 
         do {
             alpha = RandomBnd(P - ZZ(1)) + ZZ(1);
             PowerMod(alpha, alpha, ZZ(2), P);
         } while (alpha == 1);
 
-        // range [0, sqrt(P)]
+        // range [0, (pi / 8) * ord g]
+        // ord g = Q for P = (2 * Q) + 1
         a = 0;
-        do {
-            b = a + SqrRoot(P);
-        } while(b >= P);
+        b = (ZZ(314 / 8) * Q) / 100;
 
         ZZ r;
         r = RandomBnd(b - ZZ(1)) + ZZ(1);
