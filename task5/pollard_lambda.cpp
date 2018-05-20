@@ -3,156 +3,279 @@
 #include <NTL/ZZ.h>
 #include <NTL/ZZ_p.h>
 #include <NTL/vector.h>
-#include <assert.h>
+#include <cassert>
 #include <functional>
 #include <string>
 #include <sstream>
 #include <tuple>
 #include <unordered_map>
 #include <map>
-#define DIST_BITS 8
-#define WILD_KANGAROO false
-#define TAME_KANGAROO true
-#define WILD_THREADS 2
-#define TAME_THREADS 3
-#define NUM_THREADS 5
+
+#define DIST_BITS 16
 
 using namespace std;
 using namespace NTL;
 
-string ZZToString(const ZZ &z) {
-    stringstream buffer;
-    buffer << z;
-    return buffer.str();
-}
+ZZ bruteForceDLP(ZZ alpha, ZZ beta, ZZ P) {
+    ZZ res = ZZ(0);
 
-unsigned long MaxJumps(ZZ beta) {
-    unsigned long r = 1;
-    ZZ res;
-    res = r;
-
-    do {
-        /* res = (2^r - 1) / r */
-        power(res, ZZ(2), r);
-        res -= 1;
-        res /= r;
-
-        ++r;
-    } while (res < beta);
-
-    return r - 2;
-}
-
-ZZ pollardLambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
-    int tid;
-    Vec<ZZ> dists;
-    Vec<ZZ> jumps;
-    unsigned long r;
-    int index;
-    string str;
-    ZZ Q = (P - ZZ(1)) / ZZ(2);
-    ZZ res, beta_min;
-    bool quit = false;
-    map<ZZ, tuple<ZZ, bool, int>> distinguishedValues;
-
-    // beta_min = NUM_THREADS * sqrt(b - a) / 4
-    beta_min = MulMod(ZZ(NUM_THREADS), SqrRoot(b - a), P) / ZZ(4);
-
-    // r - max jumps
-    r = MaxJumps(beta_min);
-
-//    cout << "max jumps: " << r << endl;
-
-    dists.SetLength(r);
-    jumps.SetLength(r);
-
-    for (int i = 0; i < r; ++i)
-    {
-        dists[i] = MulMod(PowerMod(ZZ(2), ZZ(i), Q), ZZ(WILD_THREADS * TAME_THREADS), Q);
-        jumps[i] = PowerMod(alpha, dists[i], P);
+    while (PowerMod(alpha, res, P) != beta) {
+        res += 1;
     }
 
-    bool kangarooType;
-    ZZ dist, pos, x, step;
+    return res;
+}
+
+ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
+    ZZ x, a, b, a0, b0, X, A, B, res, r;
+    bool quit = false;
+    ZZ Q = (P - ZZ(1)) / ZZ(2);
+    map<ZZ, pair<ZZ, ZZ>> distinguished_values;
 
     #pragma omp parallel \
-    num_threads(NUM_THREADS) \
-    shared(res, quit, distinguishedValues) \
-    private(tid, dist, pos, kangarooType, x, step, index, str) \
-    firstprivate(a, b, alpha, beta, P, Q, jumps, dists, r)
+    num_threads(4) \
+    shared(res, quit, distinguished_values) \
+    private(x, a, b, r, a0, b0, A, B, X) \
+    firstprivate(alpha, beta, P, Q)
     {
-        tid = omp_get_thread_num();
-
         #pragma omp critical
         {
-            dist = 0;
-
-            if (tid < TAME_THREADS) {
-                kangarooType = TAME_KANGAROO;
-                ZZ i;
-                i = tid;
-                // dist = i*vi
-//                dist = MulMod(i, vi, Q);
-                // pos = g^((a + b) / 2 + iv)
-                pos = PowerMod(alpha, ((a + b) / ZZ(2)) + i*ZZ(WILD_THREADS), P);
-            } else {
-                kangarooType = WILD_KANGAROO;
-                ZZ j;
-                j = tid - TAME_THREADS;
-                // dist = j*vi
-//                dist = MulMod(j, vi, Q);
-                // pos = h * g^ju
-                pos = PowerMod(alpha, MulMod(j, ZZ(TAME_THREADS), P), P);
-                pos = MulMod(beta, pos, P);
-            }
-
-//            cout << "start pos:" << tid << ": " << pos << endl;
+            do {
+                a = RandomBnd(Q);
+            } while (a == 0);
+            do {
+                b = RandomBnd(Q);
+            } while (b == 0);
+            a0 = a;
+            b0 = b;
+            x = MulMod(PowerMod(alpha, a, P), PowerMod(beta, b, P), P);
         }
 
         #pragma omp barrier
 
         do {
-            str = ZZToString(pos);
-            index = (int)(hash<string>{}(str) % r);
+            switch (x % 3) {
+                case 1: /* S1 */
+                    MulMod(x, x, beta, P);
+                    // a = a;
+                    AddMod(b, b, 1, Q);
+                    break;
+                case 0: /* S2 */
+                    MulMod(x, x, x, P);
+                    MulMod(a, a, 2, Q);
+                    MulMod(b, b, 2, Q);
+                    break;
+                case 2: /* S3 */
+                    MulMod(x, x, alpha, P);
+                    AddMod(a, a, 1, Q);
+                    // b = b;
+                    break;
+                default:
+                    exit(1);
+            }
 
-            pos = MulMod(pos, jumps[index], P);
-            dist += dists[index];
-
-
-            if ((pos & ZZ((1 << DIST_BITS) - 1)) == 0) {
+            if ((x & ZZ(LeftShift(ZZ(1), DIST_BITS) - ZZ(1))) == 0) {
                 #pragma omp critical
                 if (!quit) {
-//                    cout << "distinguished:" << tid << ": " << pos << endl;
-                    pair<map<ZZ, tuple<ZZ, bool, int>>::iterator, bool> ret = distinguishedValues.insert(
-                            pair<ZZ, tuple<ZZ, bool, int>>(pos, make_tuple(dist, kangarooType, tid)));
+                    pair<map<ZZ, pair<ZZ, ZZ>>::iterator, bool> ret = distinguished_values.insert(
+                            pair<ZZ, pair<ZZ, ZZ>>(x, pair<ZZ, ZZ>(a0, b0)));
                     if (!ret.second) {
                         quit = true;
-//                        cout << "collision:" << get<2>(ret.first->second) << ": " << ret.first->first << endl;
-                        // x = (a + b) / 2 + iv - ju + dist_TAME - dist_WILD
-                        x = ZZ(a + b) / ZZ(2);
-                        ZZ i, j, dist_tame, dist_wild;
-                        if (kangarooType == TAME_KANGAROO) {
-                            i = tid;
-                            j = get<2>(ret.first->second) - TAME_THREADS;
-                            dist_tame = dist % Q;
-                            dist_wild = get<0>(ret.first->second) % Q;
-                        } else {
-                            i = get<2>(ret.first->second);
-                            j = tid - TAME_THREADS;
-                            dist_tame = get<0>(ret.first->second) % Q;
-                            dist_wild = dist % Q;
-                        }
-                        AddMod(x, x, dist_tame, Q);
-                        SubMod(x, x, dist_wild, Q);
-                        AddMod(x, x, i * WILD_THREADS, Q);
-                        SubMod(x, x, j * TAME_THREADS, Q);
+                        a = ret.first->second.first;
+                        b = ret.first->second.second;
+                        x = MulMod(PowerMod(alpha, a, P), PowerMod(beta, b, P), P);
+                        X = x;
+                        A = a;
+                        B = b;
 
-                        res = x;
+                        do {
+                            switch (x % 3) {
+                                case 1: /* S1 */
+                                    MulMod(x, x, beta, P);
+                                    // a = a;
+                                    AddMod(b, b, 1, Q);
+                                    break;
+                                case 0: /* S2 */
+                                    MulMod(x, x, x, P);
+                                    MulMod(a, a, 2, Q);
+                                    MulMod(b, b, 2, Q);
+                                    break;
+                                case 2: /* S3 */
+                                    MulMod(x, x, alpha, P);
+                                    AddMod(a, a, 1, Q);
+                                    // b = b;
+                                    break;
+                                default:
+                                    exit(1);
+                            }
+                            switch (X % 3) {
+                                case 1: /* S1 */
+                                    MulMod(X, X, beta, P);
+                                    // A = A;
+                                    AddMod(B, B, 1, Q);
+                                    break;
+                                case 0: /* S2 */
+                                    MulMod(X, X, X, P);
+                                    MulMod(A, A, 2, Q);
+                                    MulMod(B, B, 2, Q);
+                                    break;
+                                case 2: /* S3 */
+                                    MulMod(X, X, alpha, P);
+                                    AddMod(A, A, 1, Q);
+                                    // B = B;
+                                    break;
+                                default:
+                                    exit(1);
+                            }
+                            switch (X % 3) {
+                                case 1: /* S1 */
+                                    MulMod(X, X, beta, P);
+                                    // A = A;
+                                    AddMod(B, B, 1, Q);
+                                    break;
+                                case 0: /* S2 */
+                                    MulMod(X, X, X, P);
+                                    MulMod(A, A, 2, Q);
+                                    MulMod(B, B, 2, Q);
+                                    break;
+                                case 2: /* S3 */
+                                    MulMod(X, X, alpha, P);
+                                    AddMod(A, A, 1, Q);
+                                    // B = B;
+                                    break;
+                                default:
+                                    exit(1);
+                            }
+                        } while(x != X);
+
+                        SubMod(r, b, B, Q);
+                        if (r == 0) {
+                            res = ZZ(-1);
+                        } else {
+                            if (InvModStatus(r, r, Q)) {
+                                res = ZZ(-1);
+                            } else {
+                                MulMod(res, r, SubMod(A, a, Q), Q);
+                            }
+                        }
                     }
                 }
             }
         } while (!quit);
     }
+
+    return res;
+}
+
+ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &q, const ZZ &e) {
+    ZZ newAlpha, newBeta, res, gamma, invGamma;
+
+    ZZ tmp1, tmp2, tmpMod;
+    ZZ l, lastL;
+    ZZ j;
+    ZZ orderP = (P - ZZ(1));
+
+    cout << "q=" << q << "; e=" << e << endl;
+
+    res = ZZ(0);
+    lastL = ZZ(0);
+
+    newAlpha = orderP / q;
+    PowerMod(newAlpha, alpha, newAlpha, P);
+    cout << "newAlpha=" << newAlpha << endl;
+    gamma = ZZ(1);
+
+    for (j = ZZ(0); j < e; j += ZZ(1)) {
+        cout << "substep " << j+1 << "/" << e << endl;
+
+        PowerMod(tmp1, q, j-1, P);
+        tmp1 *= lastL;
+        gamma = MulMod(gamma, PowerMod(alpha, tmp1, P), P);
+        cout << "gamma=" << gamma << endl;
+
+        InvMod(invGamma, gamma, P);
+        PowerMod(tmp1, q, j+1, P);
+        tmp1 = orderP / tmp1;
+        MulMod(tmp2, beta, invGamma, P);
+        PowerMod(newBeta, tmp2, tmp1, P);
+        cout << "newBeta=" << newBeta << endl;
+
+        if (newAlpha == newBeta) {
+            l = ZZ(1);
+        } else if (NumBits(newAlpha) < DIST_BITS) {
+            l = bruteForceDLP(newAlpha, newBeta, P);
+        } else {
+            l = pollardRho(newAlpha, newBeta, P);
+        }
+
+        if (l < 0) {
+            return ZZ(-1);
+        }
+
+        cout << "l_" << j << "=log_" << newAlpha << "(" << newBeta << ") mod " << P << "=" << l << endl;
+
+        PowerMod(tmp1, q, j, P);
+        tmp2 = l * tmp1;
+        lastL = l;
+        res += tmp2;
+        cout << "x_temp=" << res << endl;
+    }
+
+    return res;
+}
+
+ZZ chineseReminderTheorem(Vec<ZZ> r, Vec<ZZ> m, int k) {
+    ZZ M, tmp, inverse, res;
+    ZZ g, x, t;
+    int i;
+
+    /* M = m[0] * m[1] * ... * m[len - 1] */
+    M = ZZ(1);
+    for (i = 0; i < k; ++i) {
+        cout << "x=" << r[i] << " mod " << m[i] << endl;
+        M *= m[i];
+    }
+    cout << "M=" << M << endl;
+
+    res = ZZ(0);
+    for (i = 0; i < k; ++i) {
+        tmp = M / m[i];
+        cout << "tmp=" << tmp << "; m_" << i << "=" << m[i] << endl;
+        XGCD(g, inverse, t, tmp, m[i]);
+        inverse = inverse % m[i];
+        res += (tmp * r[i] * inverse);
+        res = res % M;
+    }
+
+    return res;
+}
+
+ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, Vec<ZZ> primes, Vec<ZZ> exponents, int k) {
+    Vec<ZZ> xArray;
+    Vec<ZZ> pArray;
+
+    ZZ piPowEi;
+    ZZ orderP = (P - ZZ(1));
+    ZZ res;
+    int i;
+
+    xArray.SetLength(k);
+    pArray.SetLength(k);
+
+    for (i = 0; i < k; ++i) {
+        cout << "step " << i+1 << "/" << k << endl;
+        PowerMod(piPowEi, primes[i], exponents[i], P);
+
+        xArray[i] = solveSubproblem(alpha, beta, P, primes[i], exponents[i]);
+        if (xArray[i] < 0) {
+            return ZZ(-1);
+        }
+        cout << "x_" << i+1 << "=" << xArray[i] << endl;
+        pArray[i] = piPowEi;
+    }
+
+    res = chineseReminderTheorem(xArray, pArray, k);
+    res = res % orderP;
 
     return res;
 }
@@ -183,6 +306,17 @@ int main(int argc, char **argv) {
             primes[i] = conv<ZZ>(argv[arg++]);
             exponents[i] = conv<ZZ>(argv[arg++]);
         }
+
+//        ZZ r, gen;
+//        do {
+//            alpha = RandomBnd(P - ZZ(1)) + ZZ(1);
+//            r = RandomBnd(P - ZZ(1)) + ZZ(1);
+//            PowerMod(alpha, alpha, ZZ(2), P);
+//            PowerMod(gen, alpha, r, P);
+//        } while (gen != 1 || alpha == 1);
+//        ZZ r;
+//        r = RandomBnd(P - ZZ(2)) + ZZ(1);
+//        PowerMod(beta, alpha, r, P);
     } else {
          cout << "Not enough arguments provided.\n"
                 "You have to provide following commandline arguments: hpc_pohlig P alpha beta (p e)...\n";
@@ -190,7 +324,8 @@ int main(int argc, char **argv) {
     }
 
     cout << "beta = alpha^x mod P\n" << beta << " = " << alpha << "^x mod " << P << "\n\n";
-    cout << "P = PRODUCT{1, k}(pi^ei)\n" << P << " = ";
+    cout << NumBits(P) << " bits long P" << endl;
+    cout << "P - 1 = PRODUCT{1, k}(pi^ei)\n" << P-1 << " = ";
     for (i=0; i<k; i++) {
         cout << "(" << primes[i] << "^" << exponents[i] << ")";
         if (i < k-1) {
@@ -200,15 +335,15 @@ int main(int argc, char **argv) {
         }
     }
 
-//    ZZ x, real_beta;
-//    x = pollardLambda(alpha, beta, P, a, b);
-//    if (x < 0) {
-//        cout << "failure\n";
-//    } else {
-//        PowerMod(real_beta, alpha, x, P);
-//        cout << "x = " << x << endl;
-//        cout << real_beta << " = " << alpha << "^" << x << " mod " << P << '\n';
-//        assert(real_beta == beta);
-//    }
+    ZZ x, real_beta;
+    x = pohligHellman(alpha, beta, P, primes, exponents, k);
+    if (x < 0) {
+        cout << "failure\n";
+    } else {
+        PowerMod(real_beta, alpha, x, P);
+        cout << "x = " << x << endl;
+        cout << real_beta << " = " << alpha << "^" << x << " mod " << P << '\n';
+        assert(real_beta == beta);
+    }
     return 0;
 }
