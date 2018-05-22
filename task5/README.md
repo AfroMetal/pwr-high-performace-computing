@@ -4,8 +4,8 @@
 
 ## BUILD
 
-1. Navigate to `cmake-build-debug/`.
-2. Run `$ make`.
+1. `$ cmake .` or `$ cmake /path/to/this/repository/root/`
+2. `$ make`
 3. `hpc_pohlig` bin file should be created.
 
 ## RUN
