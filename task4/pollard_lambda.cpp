@@ -77,9 +77,9 @@ ZZ pollard_lambda(ZZ alpha, ZZ beta, ZZ P, ZZ a, ZZ b) {
 
     #pragma omp parallel \
     num_threads(NUM_THREADS) \
-    shared(res, quit, distinguished_values, jumps, dists, r) \
+    shared(res, quit, distinguished_values) \
     private(tid, dist, pos, kangaroo_type, x, step, index, str) \
-    firstprivate(a, b, alpha, beta, P, Q)
+    firstprivate(a, b, alpha, beta, P, Q, jumps, dists, r)
     {
         tid = omp_get_thread_num();
 
