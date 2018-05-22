@@ -11,16 +11,87 @@
 #include <unordered_map>
 #include <map>
 
-#define DIST_BITS 16
+#define DIST_BITS 1
 
 using namespace std;
 using namespace NTL;
+
+void inverseMod(ZZ &x, ZZ a, ZZ m) {
+    ZZ tmp1, tmp2, gcd;
+    XGCD(tmp1, gcd, tmp2, a, m);
+    x = gcd % m;
+}
 
 ZZ bruteForceDLP(ZZ alpha, ZZ beta, ZZ P) {
     ZZ res = ZZ(0);
 
     while (PowerMod(alpha, res, P) != beta) {
         res += 1;
+    }
+
+    return res;
+}
+
+void f(ZZ& x, ZZ& a, ZZ& b, ZZ alpha, ZZ beta, ZZ Q, ZZ P) {
+    switch(int(x % 3)) {
+        case 1: /* S1 */
+            MulMod(x, x, beta, P);
+            // a = a;
+            AddMod(b, b, 1, Q);
+            break;
+        case 0: /* S2 */
+            MulMod(x, x, x, P);
+            MulMod(a, a, 2, Q);
+            MulMod(b, b, 2, Q);
+            break;
+        case 2: /* S3 */
+            MulMod(x, x, alpha, P);
+            AddMod(a, a, 1, Q);
+            // b = b;
+            break;
+        default:
+            exit(1);
+    }
+}
+
+ZZ pollardRho2(ZZ alpha, ZZ beta, ZZ P) {
+    ZZ res;
+    ZZ Q = (P - ZZ(1)) / ZZ(2);
+
+    ZZ x, a, b, X, A, B;
+
+    do {
+        a = RandomBnd(Q);
+    } while (a == 0);
+    do {
+        b = RandomBnd(Q);
+    } while (b == 0);
+    x = MulMod(PowerMod(alpha, a, P), PowerMod(beta, b, P), P);
+
+    X = x;
+    A = a;
+    B = b;
+
+    do {
+        f(x, a, b, alpha, beta, Q, P);
+        f(X, A, B, alpha, beta, Q, P);
+        f(X, A, B, alpha, beta, Q, P);
+    } while (x != X);
+
+    if (x == X) {
+        ZZ r;
+        SubMod(r, b, B, Q);
+        if (r == 0) {
+            res = ZZ(-1);
+        } else {
+            ZZ inv_r;
+            if (InvModStatus(r, r, Q)) {
+//                res = ZZ(-1);
+                pollardRho2(alpha, beta, P);
+            } else {
+                MulMod(res, r, SubMod(A, a, Q), Q);
+            }
+        }
     }
 
     return res;
@@ -153,7 +224,8 @@ ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
                             res = ZZ(-1);
                         } else {
                             if (InvModStatus(r, r, Q)) {
-                                res = ZZ(-1);
+//                                res = ZZ(-1);
+                                pollardRho(alpha, beta, P);
                             } else {
                                 MulMod(res, r, SubMod(A, a, Q), Q);
                             }
@@ -167,13 +239,13 @@ ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
     return res;
 }
 
-ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &q, const ZZ &e) {
+ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, const ZZ &q, const ZZ &e) {
     ZZ newAlpha, newBeta, res, gamma, invGamma;
 
     ZZ tmp1, tmp2, tmpMod;
     ZZ l, lastL;
     ZZ j;
-    ZZ orderP = (P - ZZ(1));
+    ZZ orderP = (P - ZZ(1)) / Q;
 
     cout << "q=" << q << "; e=" << e << endl;
 
@@ -202,10 +274,12 @@ ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &q, co
 
         if (newAlpha == newBeta) {
             l = ZZ(1);
-        } else if (NumBits(newAlpha) < DIST_BITS) {
-            l = bruteForceDLP(newAlpha, newBeta, P);
+//        } else if (NumBits(P) < DIST_BITS) {
+//            l = bruteForceDLP(newAlpha, newBeta, P);
         } else {
-            l = pollardRho(newAlpha, newBeta, P);
+            l = bruteForceDLP(newAlpha, newBeta, P);
+//            l = pollardRho(newAlpha, newBeta, P);
+//            l = pollardRho2(newAlpha, newBeta, P);
         }
 
         if (l < 0) {
@@ -217,6 +291,7 @@ ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &q, co
         PowerMod(tmp1, q, j, P);
         tmp2 = l * tmp1;
         lastL = l;
+
         res += tmp2;
         cout << "x_temp=" << res << endl;
     }
@@ -232,7 +307,7 @@ ZZ chineseReminderTheorem(Vec<ZZ> r, Vec<ZZ> m, int k) {
     /* M = m[0] * m[1] * ... * m[len - 1] */
     M = ZZ(1);
     for (i = 0; i < k; ++i) {
-        cout << "x=" << r[i] << " mod " << m[i] << endl;
+        cout << "x=" << r[i] << "\tmod " << m[i] << endl;
         M *= m[i];
     }
     cout << "M=" << M << endl;
@@ -240,9 +315,9 @@ ZZ chineseReminderTheorem(Vec<ZZ> r, Vec<ZZ> m, int k) {
     res = ZZ(0);
     for (i = 0; i < k; ++i) {
         tmp = M / m[i];
-        cout << "tmp=" << tmp << "; m_" << i << "=" << m[i] << endl;
-        XGCD(g, inverse, t, tmp, m[i]);
-        inverse = inverse % m[i];
+//        cout << "tmp=" << tmp << "; m_" << i << "=" << m[i] << endl;
+        inverseMod(inverse, tmp, m[i]);
+//        InvMod(inverse, tmp, m[i]);
         res += (tmp * r[i] * inverse);
         res = res % M;
     }
@@ -250,7 +325,7 @@ ZZ chineseReminderTheorem(Vec<ZZ> r, Vec<ZZ> m, int k) {
     return res;
 }
 
-ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, Vec<ZZ> primes, Vec<ZZ> exponents, int k) {
+ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, Vec<ZZ> primes, Vec<ZZ> exponents, int k) {
     Vec<ZZ> xArray;
     Vec<ZZ> pArray;
 
@@ -266,7 +341,7 @@ ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, Vec<ZZ> primes, V
         cout << "step " << i+1 << "/" << k << endl;
         PowerMod(piPowEi, primes[i], exponents[i], P);
 
-        xArray[i] = solveSubproblem(alpha, beta, P, primes[i], exponents[i]);
+        xArray[i] = solveSubproblem(alpha, beta, P, Q, primes[i], exponents[i]);
         if (xArray[i] < 0) {
             return ZZ(-1);
         }
@@ -280,6 +355,25 @@ ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, Vec<ZZ> primes, V
     return res;
 }
 
+void generateInput(ZZ &P, ZZ &Q, Vec<ZZ> &primes, Vec<ZZ> &exponents, long pBits, int n) {
+    int i;
+
+    GenPrime(primes[0], pBits);
+    for (i = 1; i < n; i++) {
+        NextPrime(primes[i], primes[i-1]+1, pBits);
+    }
+
+    do {
+        GenPrime(Q, pBits*n);
+        P = Q;
+        for (i = 0; i < n; i++) {
+            exponents[i] = RandomBnd(3) + 3;
+            P *= power(primes[i], conv<long>(exponents[i]));
+        }
+        P += 1;
+    } while (ProbPrime(P) == 1);
+}
+
 int main(int argc, char **argv) {
 
     ZZ Q, P;
@@ -291,14 +385,44 @@ int main(int argc, char **argv) {
     Vec<ZZ> exponents;
     int k, i;
 
-    if (argc >= 4) {
+    if (argc == 3) {
+        int arg = 1;
+        long pBits;
+
+        pBits = conv<long>(argv[arg++]);
+        k = conv<int>(argv[arg]);
+
+        primes.SetLength(k);
+        exponents.SetLength(k);
+
+        generateInput(P, Q, primes, exponents, pBits, k);
+
+        ZZ r, gen;
+        do {
+            alpha = RandomBnd(P - ZZ(1)) + ZZ(1);
+            PowerMod(alpha, alpha, ZZ(2), P);
+        } while (alpha == 1);
+        r = RandomBnd(P - ZZ(2)) + ZZ(1);
+        PowerMod(beta, alpha, r, P);
+
+        cout << "Generated data is:" << endl;
+
+        cout << P << endl << endl;
+        cout << alpha << endl << endl;
+        cout << beta << endl << endl;
+        cout << Q << endl << endl;
+        for (i=0; i<k; i++) {
+            cout << primes[i] << endl << exponents[i] << endl << endl;
+        }
+    } else if (argc >= 5) {
         int arg = 1;
 
         P = conv<ZZ>(argv[arg++]);
         alpha = conv<ZZ>(argv[arg++]);
         beta = conv<ZZ>(argv[arg++]);
+        Q = conv<ZZ>(argv[arg++]);
 
-        k = argc - 4 >> 1;
+        k = argc - 5 >> 1;
         primes.SetLength(k);
         exponents.SetLength(k);
 
@@ -306,26 +430,20 @@ int main(int argc, char **argv) {
             primes[i] = conv<ZZ>(argv[arg++]);
             exponents[i] = conv<ZZ>(argv[arg++]);
         }
-
-//        ZZ r, gen;
-//        do {
-//            alpha = RandomBnd(P - ZZ(1)) + ZZ(1);
-//            r = RandomBnd(P - ZZ(1)) + ZZ(1);
-//            PowerMod(alpha, alpha, ZZ(2), P);
-//            PowerMod(gen, alpha, r, P);
-//        } while (gen != 1 || alpha == 1);
-//        ZZ r;
-//        r = RandomBnd(P - ZZ(2)) + ZZ(1);
-//        PowerMod(beta, alpha, r, P);
     } else {
          cout << "Not enough arguments provided.\n"
-                "You have to provide following commandline arguments: hpc_pohlig P alpha beta (p e)...\n";
+                "You have to provide following commandline arguments: hpc_pohlig P Q alpha beta (p e)...\n";
         return -1;
     }
 
-    cout << "beta = alpha^x mod P\n" << beta << " = " << alpha << "^x mod " << P << "\n\n";
+    PowerMod(alpha, alpha, Q, P);
+    PowerMod(beta, beta, Q, P);
+
+    cout << "beta^Q = (alpha^Q)^x mod P\n" << beta << "^" << Q << " = (" << alpha << "^" << Q << ")^x mod " << P << "\n\n";
     cout << NumBits(P) << " bits long P" << endl;
-    cout << "P - 1 = PRODUCT{1, k}(pi^ei)\n" << P-1 << " = ";
+    cout << "P - 1 = Q * PRODUCT{1, k}(pi^ei)\n" << P-1 << " = " << Q << " * ";
+    ZZ realP;
+    realP = Q;
     for (i=0; i<k; i++) {
         cout << "(" << primes[i] << "^" << exponents[i] << ")";
         if (i < k-1) {
@@ -333,10 +451,12 @@ int main(int argc, char **argv) {
         } else {
             cout << "\n\n";
         }
+        realP *= PowerMod(primes[i], exponents[i], P);
     }
+    assert(P-1 == realP);
 
     ZZ x, real_beta;
-    x = pohligHellman(alpha, beta, P, primes, exponents, k);
+    x = pohligHellman(alpha, beta, P, Q, primes, exponents, k);
     if (x < 0) {
         cout << "failure\n";
     } else {
