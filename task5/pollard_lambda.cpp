@@ -3,33 +3,38 @@
 #include <NTL/ZZ.h>
 #include <NTL/ZZ_p.h>
 #include <NTL/vector.h>
-#include <cassert>
+#include <assert.h>
 #include <functional>
 #include <string>
 #include <sstream>
 #include <tuple>
 #include <unordered_map>
 #include <map>
-
-#define DIST_BITS 1
+#define DIST_BITS 2
+#define WILD_KANGAROO false
+#define TAME_KANGAROO true
+#define WILD_THREADS 2
+#define TAME_THREADS 3
+#define NUM_THREADS 5
 
 using namespace std;
 using namespace NTL;
 
-void inverseMod(ZZ &x, ZZ a, ZZ m) {
+void inverseMod(ZZ &x, const ZZ &a, const ZZ &m) {
     ZZ tmp1, tmp2, gcd;
     XGCD(tmp1, gcd, tmp2, a, m);
     x = gcd % m;
 }
 
 ZZ bruteForceDLP(ZZ alpha, ZZ beta, ZZ P) {
-    ZZ res = ZZ(0);
+    ZZ res;
 
-    while (PowerMod(alpha, res, P) != beta) {
-        res += 1;
+    for (res=0; res < P; res++){
+        if (PowerMod(alpha, ++res, P) == beta) {
+            return res;
+        }
     }
-
-    return res;
+    return ZZ(-1);
 }
 
 void f(ZZ& x, ZZ& a, ZZ& b, ZZ alpha, ZZ beta, ZZ Q, ZZ P) {
@@ -54,10 +59,8 @@ void f(ZZ& x, ZZ& a, ZZ& b, ZZ alpha, ZZ beta, ZZ Q, ZZ P) {
     }
 }
 
-ZZ pollardRho2(ZZ alpha, ZZ beta, ZZ P) {
+ZZ pollardRho2(ZZ alpha, ZZ beta, ZZ P, ZZ Q) {
     ZZ res;
-    ZZ Q = (P - ZZ(1)) / ZZ(2);
-
     ZZ x, a, b, X, A, B;
 
     do {
@@ -87,7 +90,7 @@ ZZ pollardRho2(ZZ alpha, ZZ beta, ZZ P) {
             ZZ inv_r;
             if (InvModStatus(r, r, Q)) {
 //                res = ZZ(-1);
-                pollardRho2(alpha, beta, P);
+                pollardRho2(alpha, beta, P, Q);
             } else {
                 MulMod(res, r, SubMod(A, a, Q), Q);
             }
@@ -97,10 +100,151 @@ ZZ pollardRho2(ZZ alpha, ZZ beta, ZZ P) {
     return res;
 }
 
-ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
+string ZZToString(ZZ z) {
+    stringstream buffer;
+    buffer << z;
+    return buffer.str();
+}
+
+unsigned long MaxJumps(ZZ beta) {
+    unsigned long r = 1;
+    ZZ res;
+    res = r;
+
+    do {
+        /* res = (2^r - 1) / r */
+        power(res, ZZ(2), r);
+        res -= 1;
+        res /= r;
+
+        ++r;
+    } while (res < beta);
+
+    return r - 2;
+}
+
+ZZ pollardLambda(ZZ alpha, ZZ beta, ZZ P, ZZ Q) {
+    int tid;
+    Vec<ZZ> dists;
+    Vec<ZZ> jumps;
+    unsigned long r;
+    int index;
+    string str;
+    ZZ a = ZZ(0);
+    ZZ b = P-1;
+    ZZ res, beta_min;
+    bool quit = false;
+    map<ZZ, tuple<ZZ, bool, int>> distinguished_values;
+
+    // beta_min = NUM_THREADS * sqrt(b - a) / 4
+    beta_min = MulMod(ZZ(NUM_THREADS), SqrRoot(b - a), P) / ZZ(4);
+
+    // r - max jumps
+    r = MaxJumps(beta_min);
+
+//    cout << "max jumps: " << r << endl;
+
+    dists.SetLength(r);
+    jumps.SetLength(r);
+
+    for (int i = 0; i < r; ++i)
+    {
+        dists[i] = MulMod(PowerMod(ZZ(2), ZZ(i), Q), ZZ(WILD_THREADS * TAME_THREADS), Q);
+        jumps[i] = PowerMod(alpha, dists[i], P);
+    }
+
+    bool kangaroo_type;
+    ZZ dist, pos, x, step;
+
+#pragma omp parallel \
+    num_threads(NUM_THREADS) \
+    shared(res, quit, distinguished_values) \
+    private(tid, dist, pos, kangaroo_type, x, step, index, str) \
+    firstprivate(a, b, alpha, beta, P, Q, jumps, dists, r)
+    {
+        tid = omp_get_thread_num();
+
+#pragma omp critical
+        {
+            dist = 0;
+
+            if (tid < TAME_THREADS) {
+                kangaroo_type = TAME_KANGAROO;
+                ZZ i;
+                i = tid;
+                // dist = i*vi
+//                dist = MulMod(i, vi, Q);
+                // pos = g^((a + b) / 2 + iv)
+                pos = PowerMod(alpha, ((a + b) / ZZ(2)) + i*ZZ(WILD_THREADS), P);
+            } else {
+                kangaroo_type = WILD_KANGAROO;
+                ZZ j;
+                j = tid - TAME_THREADS;
+                // dist = j*vi
+//                dist = MulMod(j, vi, Q);
+                // pos = h * g^ju
+                pos = PowerMod(alpha, MulMod(j, ZZ(TAME_THREADS), P), P);
+                pos = MulMod(beta, pos, P);
+            }
+
+//            cout << "start pos:" << tid << ": " << pos << endl;
+        }
+
+#pragma omp barrier
+
+        do {
+            str = ZZToString(pos);
+            index = (int)(hash<string>{}(str) % r);
+
+            pos = MulMod(pos, jumps[index], P);
+            dist += dists[index];
+
+
+            if ((pos & ZZ((1 << DIST_BITS) - 1)) == 0) {
+#pragma omp critical
+                if (!quit) {
+//                    cout << "distinguished:" << tid << ": " << pos << endl;
+                    pair<map<ZZ, tuple<ZZ, bool, int>>::iterator, bool> ret = distinguished_values.insert(
+                            pair<ZZ, tuple<ZZ, bool, int>>(pos, make_tuple(dist, kangaroo_type, tid)));
+                    if (!ret.second) {
+                        quit = true;
+//                        cout << "collision:" << get<2>(ret.first->second) << ": " << ret.first->first << endl;
+                        // x = (a + b) / 2 + iv - ju + dist_TAME - dist_WILD
+                        x = ZZ(a + b) / ZZ(2);
+                        ZZ i, j, dist_tame, dist_wild;
+                        if (kangaroo_type == TAME_KANGAROO) {
+                            i = tid;
+                            j = get<2>(ret.first->second) - TAME_THREADS;
+                            dist_tame = dist % Q;
+                            dist_wild = get<0>(ret.first->second) % Q;
+                        } else {
+                            i = get<2>(ret.first->second);
+                            j = tid - TAME_THREADS;
+                            dist_tame = get<0>(ret.first->second) % Q;
+                            dist_wild = dist % Q;
+                        }
+                        AddMod(x, x, dist_tame, Q);
+                        SubMod(x, x, dist_wild, Q);
+                        AddMod(x, x, i * WILD_THREADS, Q);
+                        SubMod(x, x, j * TAME_THREADS, Q);
+
+                        res = x;
+                    }
+                }
+            }
+        } while (!quit);
+        dist.kill();
+        jumps.kill();
+    }
+
+    distinguished_values.clear();
+
+    return res;
+}
+
+ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P, ZZ Q) {
     ZZ x, a, b, a0, b0, X, A, B, res, r;
     bool quit = false;
-    ZZ Q = (P - ZZ(1)) / ZZ(2);
     map<ZZ, pair<ZZ, ZZ>> distinguished_values;
 
     #pragma omp parallel \
@@ -225,7 +369,7 @@ ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
                         } else {
                             if (InvModStatus(r, r, Q)) {
 //                                res = ZZ(-1);
-                                pollardRho(alpha, beta, P);
+                                pollardRho(alpha, beta, P, Q);
                             } else {
                                 MulMod(res, r, SubMod(A, a, Q), Q);
                             }
@@ -236,6 +380,7 @@ ZZ pollardRho(ZZ alpha, ZZ beta, ZZ P) {
         } while (!quit);
     }
 
+    distinguished_values.clear();
     return res;
 }
 
@@ -247,53 +392,54 @@ ZZ solveSubproblem(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, co
     ZZ j;
     ZZ orderP = (P - ZZ(1)) / Q;
 
-    cout << "q=" << q << "; e=" << e << endl;
+    cout << "\tq=" << q << "; e=" << e << endl;
 
     res = ZZ(0);
     lastL = ZZ(0);
 
     newAlpha = orderP / q;
     PowerMod(newAlpha, alpha, newAlpha, P);
-    cout << "newAlpha=" << newAlpha << endl;
+    cout << "\tnewAlpha=" << newAlpha << endl;
     gamma = ZZ(1);
 
     for (j = ZZ(0); j < e; j += ZZ(1)) {
-        cout << "substep " << j+1 << "/" << e << endl;
+        cout << "\n\tSUBSTEP " << j+1 << "/" << e << endl;
 
         PowerMod(tmp1, q, j-1, P);
         tmp1 *= lastL;
         gamma = MulMod(gamma, PowerMod(alpha, tmp1, P), P);
-        cout << "gamma=" << gamma << endl;
+        cout << "\t\tgamma=" << gamma << endl;
 
         InvMod(invGamma, gamma, P);
         PowerMod(tmp1, q, j+1, P);
         tmp1 = orderP / tmp1;
         MulMod(tmp2, beta, invGamma, P);
         PowerMod(newBeta, tmp2, tmp1, P);
-        cout << "newBeta=" << newBeta << endl;
+        cout << "\t\tnewBeta=" << newBeta << endl;
 
         if (newAlpha == newBeta) {
             l = ZZ(1);
-//        } else if (NumBits(P) < DIST_BITS) {
-//            l = bruteForceDLP(newAlpha, newBeta, P);
-        } else {
+        } else if (NumBits(newBeta) <= DIST_BITS) {
             l = bruteForceDLP(newAlpha, newBeta, P);
-//            l = pollardRho(newAlpha, newBeta, P);
-//            l = pollardRho2(newAlpha, newBeta, P);
+        } else {
+//            l = bruteForceDLP(newAlpha, newBeta, P);
+            l = pollardRho(newAlpha, newBeta, P, orderP);
+//            l = pollardRho2(newAlpha, newBeta, P, orderP);
+//            l = pollardLambda(newAlpha, newBeta, P, orderP);
         }
 
         if (l < 0) {
             return ZZ(-1);
         }
 
-        cout << "l_" << j << "=log_" << newAlpha << "(" << newBeta << ") mod " << P << "=" << l << endl;
+        cout << "\t\tl_" << j << "=log_" << newAlpha << "(" << newBeta << ") mod " << P << "=" << l << endl;
 
         PowerMod(tmp1, q, j, P);
         tmp2 = l * tmp1;
         lastL = l;
 
         res += tmp2;
-        cout << "x_temp=" << res << endl;
+        cout << "\t\tx_temp=" << res << endl;
     }
 
     return res;
@@ -330,7 +476,7 @@ ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, Vec<
     Vec<ZZ> pArray;
 
     ZZ piPowEi;
-    ZZ orderP = (P - ZZ(1));
+    ZZ orderP = (P - ZZ(1)) / Q;
     ZZ res;
     int i;
 
@@ -338,14 +484,14 @@ ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, Vec<
     pArray.SetLength(k);
 
     for (i = 0; i < k; ++i) {
-        cout << "step " << i+1 << "/" << k << endl;
+        cout << "\nSTEP " << i+1 << "/" << k << endl;
         PowerMod(piPowEi, primes[i], exponents[i], P);
 
         xArray[i] = solveSubproblem(alpha, beta, P, Q, primes[i], exponents[i]);
         if (xArray[i] < 0) {
             return ZZ(-1);
         }
-        cout << "x_" << i+1 << "=" << xArray[i] << endl;
+        cout << "\tx_" << i+1 << "=" << xArray[i] << endl;
         pArray[i] = piPowEi;
     }
 
@@ -357,21 +503,29 @@ ZZ pohligHellman(const ZZ &alpha, const ZZ &beta, const ZZ &P, const ZZ &Q, Vec<
 
 void generateInput(ZZ &P, ZZ &Q, Vec<ZZ> &primes, Vec<ZZ> &exponents, long pBits, int n) {
     int i;
+    ZZ partP = ZZ(1);
+    ZZ q1, q2, q3;
 
-    GenPrime(primes[0], pBits);
-    for (i = 1; i < n; i++) {
-        NextPrime(primes[i], primes[i-1]+1, pBits);
+    primes[0] = ZZ(2);
+    if (n>1) {
+        GenPrime(primes[1], pBits);
+        if (n>2) {
+            for (i = 2; i < n; i++) {
+                NextPrime(primes[i], primes[i-1] + 1);
+            }
+        }
+    }
+    for (i = 0; i < n; i++) {
+        exponents[i] = RandomBnd(3) + 3;
+        partP *= power(primes[i], conv<long>(exponents[i]));
     }
 
     do {
-        GenPrime(Q, pBits*n);
-        P = Q;
-        for (i = 0; i < n; i++) {
-            exponents[i] = RandomBnd(3) + 3;
-            P *= power(primes[i], conv<long>(exponents[i]));
-        }
-        P += 1;
-    } while (ProbPrime(P) == 1);
+        GenPrime(q1, pBits*n + 2);
+        GenPrime(q2, pBits*n - 2);
+        Q = q1 * q2;
+        P = (Q * partP) + 1;
+    } while (!ProbPrime(P));
 }
 
 int main(int argc, char **argv) {
@@ -439,9 +593,10 @@ int main(int argc, char **argv) {
     PowerMod(alpha, alpha, Q, P);
     PowerMod(beta, beta, Q, P);
 
-    cout << "beta^Q = (alpha^Q)^x mod P\n" << beta << "^" << Q << " = (" << alpha << "^" << Q << ")^x mod " << P << "\n\n";
+    cout << "beta^Q = (alpha^Q)^x mod P\n" << beta << " = " << alpha << "^x mod " << P << endl;
+    cout << endl << NumBits(Q) << " bits long Q" << endl;
     cout << NumBits(P) << " bits long P" << endl;
-    cout << "P - 1 = Q * PRODUCT{1, k}(pi^ei)\n" << P-1 << " = " << Q << " * ";
+    cout << endl << "P - 1 = Q * PRODUCT{1, k}(pi^ei)\n" << P-1 << " = " << Q << " * ";
     ZZ realP;
     realP = Q;
     for (i=0; i<k; i++) {
@@ -449,7 +604,7 @@ int main(int argc, char **argv) {
         if (i < k-1) {
             cout << " * ";
         } else {
-            cout << "\n\n";
+            cout << endl;
         }
         realP *= PowerMod(primes[i], exponents[i], P);
     }
