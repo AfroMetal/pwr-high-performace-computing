@@ -1,5 +1,5 @@
 N = 2584
-r = 1152
+r = 144
 
 
 def gcd(u, v):
@@ -15,6 +15,7 @@ def group_elements():
 
 
 if __name__ == "__main__":
+
     i = 0
     for a in group_elements():
         i += 1
@@ -22,5 +23,6 @@ if __name__ == "__main__":
             assert a ** r % N == 1
         except AssertionError:
             print(f"{a}^r != 1 mod {N}")
+            exit(1)
 
     print(f"{i} group elements checked!")
